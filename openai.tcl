@@ -10,8 +10,6 @@
 #   2. Add 'source scripts/openai.tcl' to your Eggdrop config file.
 #   3. You may need to install the 'http' and 'json' Tcl packages if they
 #      aren't already present.
-#      - Tcl packages can often be installed via your system's package manager
-#        or by using 'tclkit' and 'teacup'.
 
 namespace eval ::openai {}
 
@@ -78,7 +76,7 @@ proc ::openai::query {query} {
                 lappend lines $line
             }
         }
-        #return [string trim $message]
+        
         return $lines
     } else {
         return "Error: Unable to parse API response."
@@ -97,12 +95,9 @@ proc ::openai::command {nick host handle channel text} {
     }
     
     set prompt [string range $text 1 end]
-    #putserv "PRIVMSG $channel :Querying OpenAI..."
     
-    # Run the query in the background to avoid blocking the bot
     set response [::openai::query $prompt]
     
-    #putserv "PRIVMSG $channel :$nick: $response"
     foreach line $response {
         putserv "PRIVMSG $channel :$line"
     }
