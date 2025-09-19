@@ -8,7 +8,7 @@ namespace eval gemini {
     variable model "gemini-2.5-flash-lite"
     variable prompt "You are a helpful assistant. Your answers will be relayed over IRC, so they must be in plaintext with no markdown, and when possible keep to a single line, otherwise 5 lines maximum. Each line should be no longer than 500 characters."
     set log_stats 1
-    variable db_file "data/$::botnick-gemini.db"
+    variable db_file "data/gemini.db"
 
     variable api_endpoint "https://generativelanguage.googleapis.com/v1beta/models/"
     append api_endpoint $model ":generateContent"
@@ -17,12 +17,8 @@ namespace eval gemini {
 
     setudef flag gemini
 
-    if {$log_stats} {
-        package require sqlite3
-    }
+    http::register https 443 [list ::tls::socket -autoservername true]
 }
-
-http::register https 443 [list ::tls::socket -autoservername true]
 
 proc gemini::command {nick host hand chan text} {
     if {![channel get $chan gemini]} { return }
@@ -164,5 +160,38 @@ proc gemini::log_usage {model ptokens ctokens tutokens thtokens totokens endpoin
     
     db close
 }
+
+proc gemini::create_db {} {
+    variable db_file
+    sqlite3 db $db_file
+
+    db eval {
+        CREATE TABLE IF NOT EXISTS api_requests (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            timestamp TEXT DEFAULT CURRENT_TIMESTAMP,
+            model TEXT NOT NULL,
+            prompt_tokens INTEGER NOT NULL,
+            candidates_tokens INTEGER NOT NULL,
+            tool_use_tokens INTEGER NOT NULL,
+            thoughts_tokens INTEGER NOT NULL,
+            total_tokens INTEGER NOT NULL,
+            endpoint TEXT NOT NULL,
+            channel TEXT NOT NULL,
+            nickname TEXT NOT NULL,
+            response_id TEXT NOT NULL
+        )
+    }
+
+    db close
+}
+
+if {$gemini::log_stats} {
+        package require sqlite3
+
+        if {![file exists $gemini::db_file]} {
+            gemini::create_db
+            putlog "gemini.tcl: Created new database at $gemini::db_file"
+        }
+    }
 
 putlog "gemini.tcl loaded"
