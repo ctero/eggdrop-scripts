@@ -186,12 +186,12 @@ proc gemini::create_db {} {
 }
 
 if {$gemini::log_stats} {
-        package require sqlite3
+    package require sqlite3
 
-        if {![file exists $gemini::db_file]} {
-            gemini::create_db
-            putlog "gemini.tcl: Created new database at $gemini::db_file"
-        }
+    if {![file exists $gemini::db_file]} {
+        gemini::create_db
+        putlog "gemini.tcl: Created new database at $gemini::db_file"
     }
+}
 
 putlog "gemini.tcl loaded"
