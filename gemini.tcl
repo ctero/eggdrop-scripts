@@ -1,21 +1,25 @@
 package require http
 package require tls
 package require json
-package require sqlite3
 
 namespace eval gemini {
     variable trigger "!gemini"
     variable api_key $::env(GEMINI_KEY)
-    variable api_endpoint "https://generativelanguage.googleapis.com/v1beta/models/"
     variable model "gemini-2.5-flash-lite"
     variable prompt "You are a helpful assistant. Your answers will be relayed over IRC, so they must be in plaintext with no markdown, and when possible keep to a single line, otherwise 5 lines maximum. Each line should be no longer than 500 characters."
-    variable db_file "data/$::botnick.db"
+    set log_stats 1
+    variable db_file "data/$::botnick-gemini.db"
 
+    variable api_endpoint "https://generativelanguage.googleapis.com/v1beta/models/"
     append api_endpoint $model ":generateContent"
 
     bind pub -|- $trigger gemini::command
 
     setudef flag gemini
+
+    if {$log_stats} {
+        package require sqlite3
+    }
 }
 
 http::register https 443 [list ::tls::socket -autoservername true]
@@ -29,10 +33,10 @@ proc gemini::command {nick host hand chan text} {
         return 0
     }
 
-    gemini::query $text $chan
+    gemini::query $text $nick $chan
 }
 
-proc gemini::query {query chan} {
+proc gemini::query {query nick chan} {
     variable api_key
     variable api_endpoint
     variable model
@@ -68,14 +72,15 @@ proc gemini::query {query chan} {
     ]
 
     # Start the asynchronous fetch
-    http::geturl $api_endpoint -headers $headers -query $body -command [list gemini::process_data $chan]
+    http::geturl $api_endpoint -headers $headers -query $body -command [list gemini::process_data $nick $chan]
 }
 
-proc gemini::process_data {chan token} {
+proc gemini::process_data {nick chan token} {
     upvar #0 $token state
     set status $state(status)
     variable model
     variable api_endpoint
+    variable log_stats
     
     if {$status eq "ok"} {
         set json_data $state(body)
@@ -102,30 +107,31 @@ proc gemini::process_data {chan token} {
             }
 
             # log usage
-            if {[dict exists $response usageMetadata]} {
-                putlog "Found usage metadata, processing..."
+            if {$log_stats && [dict exists $response usageMetadata]} {
+                set response_id [dict get $response responseId]
+
                 set usage [dict get $response usageMetadata]
 
                 # Get the required token counts, providing a default of 0 if they don't exist
                 set prompt_tokens [dict get $usage promptTokenCount]
                 set total_tokens [dict get $usage totalTokenCount]
 
-                # Safely calculate completion tokens
-                set completion_tokens 0
+                set candidates_tokens 0
                 if {[dict exists $usage candidatesTokenCount]} {
-                    incr completion_tokens [dict get $usage candidatesTokenCount]
-                }
-                if {[dict exists $usage toolUsePromptTokenCount]} {
-                    incr completion_tokens [dict get $usage toolUsePromptTokenCount]
-                }
-                if {[dict exists $usage thoughtsTokenCount]} {
-                    incr completion_tokens [dict get $usage thoughtsTokenCount]
+                    set candidates_tokens [dict get $usage candidatesTokenCount]
                 }
 
-                set cost 0.00
+                set tool_use_tokens 0
+                if {[dict exists $usage toolUsePromptTokenCount]} {
+                    set tool_use_tokens [dict get $usage toolUsePromptTokenCount]
+                }
+
+                set thoughts_tokens 0
+                if {[dict exists $usage thoughtsTokenCount]} {
+                    set thoughts_tokens [dict get $usage thoughtsTokenCount]
+                }
                 
-                putlog "Data processed, attempting to log usage..."
-                gemini::log_usage $model $prompt_tokens $completion_tokens $total_tokens $cost $api_endpoint
+                gemini::log_usage $model $prompt_tokens $candidates_tokens $tool_use_tokens $thoughts_tokens $total_tokens $api_endpoint $chan $nick $response_id
 
             } else {
                 putlog "No usage metadata found"
@@ -140,24 +146,20 @@ proc gemini::process_data {chan token} {
     http::cleanup $token
 }
 
-proc gemini::log_usage {model ptokens ctokens ttokens cost endpoint} {
+proc gemini::log_usage {model ptokens ctokens tutokens thtokens totokens endpoint chan nick response_id} {
     variable db_file
     set timestamp [clock format [clock seconds] -format "%Y-%m-%d %H:%M:%S"]
     
     sqlite3 db $db_file
     
-    # This is the clearest and most secure syntax.
-    # The 'catch' block will trap any errors from the 'db eval' command.
     if {[catch {
         db eval {
             INSERT INTO api_requests 
-            (timestamp, model, prompt_tokens, completion_tokens, total_tokens, cost, api_endpoint) 
-            VALUES ($timestamp, $model, $ptokens, $ctokens, $ttokens, $cost, $endpoint)
+            (timestamp, model, prompt_tokens, candidates_tokens, tool_use_tokens, thoughts_tokens, total_tokens, endpoint, channel, nickname, response_id) 
+            VALUES ($timestamp, $model, $ptokens, $ctokens, $tutokens, $thtokens, $totokens, $endpoint, $chan, $nick, $response_id)
         }
     } errmsg]} {
         putlog "ERROR: Failed to log API usage to database. SQLite error: $errmsg"
-    } else {
-        putlog "Logged API usage: model=$model, prompt_tokens=$ptokens, completion_tokens=$ctokens, total_tokens=$ttokens, cost=$cost, endpoint=$endpoint"
     }
     
     db close
