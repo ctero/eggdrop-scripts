@@ -7,7 +7,7 @@ namespace eval gemini {
     variable api_key $::env(GEMINI_KEY)
     variable api_endpoint "https://generativelanguage.googleapis.com/v1beta/models/"
     variable model "gemini-2.5-flash-lite"
-    variable prompt "You are a helpful assistant. Your answers will be relayed over IRC, so they must be in plaintext, and when possible keep to a single line."
+    variable prompt "You are a helpful assistant. Your answers will be relayed over IRC, so they must be in plaintext with no markdown, and when possible keep to a single line, otherwise 5 lines maximum. Each line should be no longer than 500 characters."
 
     append api_endpoint $model ":generateContent"
 
@@ -27,14 +27,10 @@ proc gemini::command {nick host hand chan text} {
         return 0
     }
 
-    set response [gemini::query $text]
-
-    foreach line $response {
-        putserv "PRIVMSG $chan :$line"
-    }
+    gemini::query $text $chan
 }
 
-proc gemini::query {query} {
+proc gemini::query {query chan} {
     variable api_key
     variable api_endpoint
     variable model
@@ -69,36 +65,45 @@ proc gemini::query {query} {
         ] \
     ]
 
-    set token [http::geturl $api_endpoint -headers $headers -query $body]
+    # "Start the asynchronous fetch"
+    http::geturl $api_endpoint -headers $headers -query $body -command [list gemini::process_data $chan]
+}
 
-    set status [http::status $token]
-    set code [http::ncode $token]
+proc gemini::process_data {chan token} {
+    upvar #0 $token state
+    set status $state(status)
+    
+    if {$status eq "ok"} {
+        set json_data $state(body)
+        set response [json::json2dict $json_data]
 
-    if {$status ne "ok"} {
-        return [list "Error: $status - $code"]
+        if {[dict exists $response candidates]} {
+            set text_content [dict get [lindex [dict get [lindex [dict get $response candidates] 0] content parts] 0] text]
+
+            set lines {}
+            set line_count 0
+            foreach line [split $text_content "\n"] {
+                if {[string trim $line] ne ""} {
+                    incr line_count
+                    if {$line_count > 4} {
+                        lappend lines "Output truncated to 5 lines to avoid spam."
+                        break
+                    }
+                    lappend lines $line
+                }
+            }
+
+            foreach line $lines {
+                putserv "PRIVMSG $chan :$line"
+            }
+        } else {
+            putserv "PRIVMSG $chan :Error: No candidates found in response."
+        }
+    } else {
+        putserv "PRIVMSG $chan :Error: $status"
     }
-
-    set json_data [http::data $token]
-    set response [json::json2dict $json_data]
 
     http::cleanup $token
-
-    set text_content [dict get [lindex [dict get [lindex [dict get $response candidates] 0] content parts] 0] text]
-
-    set lines {}
-    set line_count 0
-    foreach line [split $text_content "\n"] {
-        if {[string trim $line] ne ""} {
-            incr line_count
-            if {$line_count > 4} {
-                lappend lines "Output truncated to 5 lines to avoid spam."
-                break
-            }
-            lappend lines $line
-        }
-    }
-
-    return $lines
 }
 
 putlog "gemini.tcl loaded"
