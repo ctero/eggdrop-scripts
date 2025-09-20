@@ -102,7 +102,7 @@ proc openai::process_data {nick chan token} {
                 set completion_tokens [dict get $usage completion_tokens]
                 set total_tokens [dict get $usage total_tokens]
 
-                openai::log_usage $provider $model $prompt_tokens $completion_tokens $total_tokens $api_endpoint $chan $nick $response_id
+                openai::log_usage $provider $model_name $prompt_tokens $completion_tokens $total_tokens $api_endpoint $chan $nick $response_id
 
             } else {
                 putlog "No usage metadata found"
@@ -120,7 +120,7 @@ proc openai::process_data {nick chan token} {
 proc openai::log_usage {provider model ptokens ctokens totokens endpoint chan nick response_id} {
     variable db_file
     set timestamp [clock format [clock seconds] -format "%Y-%m-%d %H:%M:%S"]
-    
+
     sqlite3 db $db_file
     
     if {[catch {
